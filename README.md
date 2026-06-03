@@ -1,6 +1,6 @@
-# Base64 Tool
+# EncodeTool
 
-**A simple, lightweight Base64 encoder/decoder desktop application built with Python and Tkinter.**
+**A comprehensive 8-in-1 encoding/decoding desktop toolbox built with Python and Tkinter.**
 
 ---
 
@@ -8,11 +8,11 @@
 
 **中文**
 
-一个基于 Python + Tkinter 构建的本地 Base64 编解码桌面工具，无需安装任何第三方依赖，开箱即用。
+一个基于 Python + Tkinter 构建的本地编码解码桌面工具箱，集成 8 种常用编解码功能，零第三方依赖，开箱即用。
 
 **English**
 
-A lightweight local Base64 encode/decode desktop tool built with Python and Tkinter. No third-party dependencies required — works out of the box.
+A local encoding/decoding desktop toolbox built with Python and Tkinter, integrating 8 common encode/decode functions. No third-party dependencies required — works out of the box.
 
 ---
 
@@ -20,12 +20,14 @@ A lightweight local Base64 encode/decode desktop tool built with Python and Tkin
 
 | 功能 | Feature |
 |---|---|
-| Base64 解码（Base64 → 文本） | Base64 decode (Base64 → Text) |
-| Base64 编码（文本 → Base64） | Base64 encode (Text → Base64) |
-| 一键清空输入与输出 | One-click clear |
-| 复制结果到剪贴板 | Copy result to clipboard |
-| 非法输入错误提示 | Error hint for invalid input |
-| 窗口可自由缩放 | Resizable window |
+| Base64 编码/解码 | Base64 encode/decode |
+| URL 编码/解码 | URL encode/decode |
+| HTML 实体编码/解码 | HTML entity encode/decode |
+| Unicode 转义/反转义 | Unicode escape/unescape |
+| Hex 十六进制编/解码 | Hex encode/decode |
+| MD5 哈希生成 | MD5 hash generation |
+| SHA-256 哈希生成 | SHA-256 hash generation |
+| JWT 解析 | JWT payload parsing |
 
 ---
 
@@ -39,9 +41,9 @@ A lightweight local Base64 encode/decode desktop tool built with Python and Tkin
 
 ### 方式一：直接运行 exe（Windows）/ Run exe directly (Windows)
 
-前往 [Releases](https://github.com/Checkzsy/base64-tool/releases) 页面下载最新版 `Base64Tool.exe`，双击运行，无需安装 Python。
+前往 [Releases](https://github.com/Checkzsy/base64-tool/releases) 页面下载最新版 `EncodeTool.exe`，双击运行，无需安装 Python。
 
-Go to the [Releases](https://github.com/Checkzsy/base64-tool/releases) page, download the latest `Base64Tool.exe`, and double-click to run. No Python installation required.
+Go to the [Releases](https://github.com/Checkzsy/base64-tool/releases) page, download the latest `EncodeTool.exe`, and double-click to run. No Python installation required.
 
 ### 方式二：源码运行 / Run from source
 
@@ -52,15 +54,15 @@ Go to the [Releases](https://github.com/Checkzsy/base64-tool/releases) page, dow
 ```bash
 git clone https://github.com/Checkzsy/base64-tool.git
 cd base64-tool
-python base64_tool.py
+python encode_tool.py
 ```
 
 ### 方式三：自行打包 / Build exe yourself
 
 ```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed --name "Base64Tool" base64_tool.py
-# 输出在 dist/Base64Tool.exe
+pip install nuitka ordered-set zstandard
+python -m nuitka --standalone --onefile --windows-disable-console --enable-plugin=tk-inter --output-filename=EncodeTool.exe encode_tool.py
+# 输出在当前目录 EncodeTool.exe
 ```
 
 ---
@@ -69,11 +71,27 @@ pyinstaller --onefile --windowed --name "Base64Tool" base64_tool.py
 
 ```
 base64-tool/
-├── base64_tool.py    # 主程序 / Main application
-├── requirements.txt  # 依赖说明 / Dependencies
-├── LICENSE           # MIT License
+├── encode_tool.py     # 主程序（8合1版本）/ Main application (v2.0)
+├── base64_tool.py     # 旧版（仅Base64）/ Legacy Base64-only version
+├── requirements.txt   # 依赖说明 / Dependencies
+├── LICENSE            # MIT License
 └── README.md
 ```
+
+---
+
+## 编码功能对照 / Encoding Reference
+
+| 编码类型 | 编码函数 | 解码函数 |
+|---|---|---|
+| Base64 | `base64.b64encode` | `base64.b64decode` |
+| URL | `urllib.parse.quote` | `urllib.parse.unquote` |
+| HTML | `html.escape` | `html.unescape` |
+| Unicode | `str.encode('unicode_escape')` | `bytes.decode('unicode_escape')` |
+| Hex | `str.encode().hex()` | `bytes.fromhex()` |
+| MD5 | `hashlib.md5` | *(单向哈希 / one-way)* |
+| SHA-256 | `hashlib.sha256` | *(单向哈希 / one-way)* |
+| JWT | — | `base64.urlsafe_b64decode` + `json.loads` |
 
 ---
 
