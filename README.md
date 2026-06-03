@@ -33,6 +33,8 @@ A local encoding/decoding desktop toolbox built with Python and Tkinter, integra
 
 ## 截图 / Screenshot
 
+<img width="720" height="570" alt="image" src="https://github.com/user-attachments/assets/6a707a01-4726-4f7e-b1b7-de7807b63e7d" />
+
 > *(Add a screenshot here after first launch)*
 
 ---
