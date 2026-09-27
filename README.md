@@ -1,6 +1,6 @@
 # EncodeTool
 
-**A comprehensive 8-in-1 encoding/decoding desktop toolbox built with Python and Tkinter.**
+**A comprehensive 9-in-1 encoding/decoding desktop toolbox built with Python and Tkinter.**
 
 ---
 
@@ -8,11 +8,11 @@
 
 **中文**
 
-一个基于 Python + Tkinter 构建的本地编码解码桌面工具箱，集成 8 种常用编解码功能，零第三方依赖，开箱即用。
+一个基于 Python + Tkinter 构建的本地编码解码桌面工具箱，集成 9 种常用编解码/数据处理功能，零第三方依赖，开箱即用。
 
 **English**
 
-A local encoding/decoding desktop toolbox built with Python and Tkinter, integrating 8 common encode/decode functions. No third-party dependencies required — works out of the box.
+A local encoding/decoding desktop toolbox built with Python and Tkinter, integrating 9 common encode/decode and data-processing functions. No third-party dependencies required — works out of the box.
 
 ---
 
@@ -28,6 +28,7 @@ A local encoding/decoding desktop toolbox built with Python and Tkinter, integra
 | MD5 哈希生成 | MD5 hash generation |
 | SHA-256 哈希生成 | SHA-256 hash generation |
 | JWT 解析 | JWT payload parsing |
+| JSON 格式化 / 转表格 / 转字典 / 树形视图 | JSON format / to-table / to-Python-dict / tree view |
 
 ---
 
@@ -73,7 +74,7 @@ python -m nuitka --standalone --onefile --windows-disable-console --enable-plugi
 
 ```
 base64-tool/
-├── encode_tool.py     # 主程序（8合1版本）/ Main application (v2.0)
+├── encode_tool.py     # 主程序（9合1版本）/ Main application (v2.1)
 ├── base64_tool.py     # 旧版（仅Base64）/ Legacy Base64-only version
 ├── requirements.txt   # 依赖说明 / Dependencies
 ├── LICENSE            # MIT License
@@ -94,6 +95,7 @@ base64-tool/
 | MD5 | `hashlib.md5` | *(单向哈希 / one-way)* |
 | SHA-256 | `hashlib.sha256` | *(单向哈希 / one-way)* |
 | JWT | — | `base64.urlsafe_b64decode` + `json.loads` |
+| JSON | `json.dumps(indent=2)` | `json.loads` / Treeview 树形视图 |
 
 ---
 

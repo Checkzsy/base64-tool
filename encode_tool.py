@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-EncodeTool - 8合1 编码/解码桌面工具
-功能：Base64 / URL / HTML / Unicode / Hex / MD5 / SHA-256 / JWT
+EncodeTool - 9合1 编码/解码桌面工具
+功能：Base64 / URL / HTML / Unicode / Hex / MD5 / SHA-256 / JWT / JSON
 依赖：Python 标准库（零第三方依赖）
 """
 
@@ -80,6 +80,170 @@ def jwt_decode(token):
     return result
 
 
+def json_format(text):
+    """格式化 JSON：2 空格缩进，中文不转义"""
+    data = json.loads(text)
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def json_to_python(text):
+    """将 JSON 转成 Python 字典字面量（True/False/None、单引号字符串）"""
+    data = json.loads(text)
+    result, _ = _py_literal(data, 0)
+    return result
+
+
+def _py_literal(value, depth):
+    """递归将 JSON 值转为 Python 字面量文本，返回 (文本, 是否多行)"""
+    indent = "    " * depth
+    child_indent = "    " * (depth + 1)
+    if isinstance(value, dict):
+        if not value:
+            return "{}", False
+        items = []
+        for k, v in value.items():
+            text, _ = _py_literal(v, depth + 1)
+            items.append(f"{child_indent}'{k}': {text}")
+        return "{\n" + ",\n".join(items) + f"\n{indent}}}", True
+    if isinstance(value, list):
+        if not value:
+            return "[]", False
+        items = []
+        for v in value:
+            text, _ = _py_literal(v, depth + 1)
+            items.append(f"{child_indent}{text}")
+        return "[\n" + ",\n".join(items) + f"\n{indent}]", True
+    if value is True:
+        return "True", False
+    if value is False:
+        return "False", False
+    if value is None:
+        return "None", False
+    if isinstance(value, str):
+        return repr(value), False
+    # int / float
+    return repr(value), False
+
+
+def _display_width(s):
+    """计算字符串显示宽度：中日韩等全角字符按 2 计算"""
+    import unicodedata
+    width = 0
+    for ch in s:
+        width += 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+    return width
+
+
+def _pad(s, width):
+    """按显示宽度右侧补空格对齐"""
+    return s + " " * (width - _display_width(s))
+
+
+def _compact(value):
+    """单元格内容：纯字符串直接显示，嵌套值显示为紧凑 JSON"""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def json_to_table(text):
+    """将 JSON 转成文本表格。
+    顶层数组：每个元素一行，所有键并集做表头；
+    顶层对象：Key / Value 两列；
+    嵌套值在单元格内显示为紧凑 JSON。"""
+    data = json.loads(text)
+    if isinstance(data, list):
+        if not data:
+            return "（空数组）"
+        if all(isinstance(item, dict) for item in data):
+            # 键并集做表头（保持首次出现顺序）
+            headers = []
+            for item in data:
+                for k in item:
+                    if k not in headers:
+                        headers.append(k)
+            rows = [[_compact(item.get(k)) if k in item else "—" for k in headers]
+                    for item in data]
+        else:
+            headers = ["Index", "Value"]
+            rows = [[str(i), _compact(v)] for i, v in enumerate(data)]
+    elif isinstance(data, dict):
+        headers = ["Key", "Value"]
+        rows = [[str(k), _compact(v)] for k, v in data.items()]
+    else:
+        # 标量
+        headers = ["Value"]
+        rows = [[_compact(data)]]
+
+    # 计算每列宽度（表头和单元格取最大显示宽度，上限 60）
+    widths = []
+    for col in range(len(headers)):
+        cells = [rows[r][col] for r in range(len(rows))]
+        cells.append(headers[col])
+        widths.append(min(max(_display_width(c) for c in cells), 60))
+
+    # 截断超宽单元格
+    for r in range(len(rows)):
+        for c in range(len(headers)):
+            if _display_width(rows[r][c]) > widths[c]:
+                rows[r][c] = _truncate(rows[r][c], widths[c])
+
+    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+    header_line = "|" + "|".join(f" {_pad(h, widths[c])} " for c, h in enumerate(headers)) + "|"
+    lines = [sep, header_line, sep]
+    for row in rows:
+        lines.append("|" + "|".join(f" {_pad(v, widths[c])} " for c, v in enumerate(row)) + "|")
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def _truncate(s, width):
+    """按显示宽度截断字符串，末尾加省略号"""
+    import unicodedata
+    out = ""
+    w = 0
+    for ch in s:
+        cw = 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+        if w + cw > width - 1:
+            break
+        out += ch
+        w += cw
+    return out + "…"
+
+
+def _populate_tree(tree, parent, data):
+    """递归填充 Treeview：容器节点可展开，叶子显示 key: 值"""
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                if not v:
+                    tree.insert(parent, "end", text=f"{k} : {json.dumps(v)}", open=False)
+                else:
+                    node = tree.insert(parent, "end", text=f"{k} ▸", open=True)
+                    _populate_tree(tree, node, v)
+            else:
+                tree.insert(parent, "end", text=f"{k} : {json.dumps(v, ensure_ascii=False)}", open=False)
+    elif isinstance(data, list):
+        for i, v in enumerate(data):
+            label = f"[{i}]"
+            if isinstance(v, (dict, list)):
+                if not v:
+                    tree.insert(parent, "end", text=f"{label} {json.dumps(v)}", open=False)
+                else:
+                    node = tree.insert(parent, "end", text=f"{label} ▸", open=True)
+                    _populate_tree(tree, node, v)
+            else:
+                tree.insert(parent, "end", text=f"{label} {json.dumps(v, ensure_ascii=False)}", open=False)
+    else:
+        tree.insert(parent, "end", text=json.dumps(data, ensure_ascii=False))
+
+
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
@@ -128,6 +292,9 @@ class EncodeApp:
         self.root.geometry("720x540")
         self.root.minsize(580, 420)
         self.root.configure(bg=BG)
+
+        # 每个 tab 的状态标签和输入输出框引用
+        self.tabs = {}
 
         # 每个 tab 的状态标签和输入输出框引用
         self.tabs = {}
@@ -206,7 +373,7 @@ class EncodeApp:
         tk.Label(header, text="EncodeTool",
                  font=(FONT_FAMILY, 14, "bold"),
                  bg=ACCENT, fg="white").pack(side="left", padx=16)
-        tk.Label(header, text="8合1 编码解码工具箱",
+        tk.Label(header, text="9合1 编码解码工具箱",
                  font=(FONT_FAMILY, 10),
                  bg=ACCENT, fg="#bfdbfe").pack(side="left")
 
@@ -217,6 +384,185 @@ class EncodeApp:
         # 创建每个 Tab
         for name, enc_fn, dec_fn, reversible, dec_label in ENCODERS:
             self._create_tab(name, enc_fn, dec_fn, reversible, dec_label)
+
+        # JSON tab（独立构建，带树形表格视图）
+        self._create_json_tab()
+
+    def _set_output_text(self, output_text, result):
+        """往 Text 输出框写入结果"""
+        output_text.config(state="normal")
+        output_text.delete("1.0", tk.END)
+        output_text.insert("1.0", result)
+        output_text.config(state="disabled")
+
+    def _create_json_tab(self):
+        frame = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(frame, text="  JSON  ")
+
+        # 输入区域
+        input_lf = ttk.LabelFrame(frame, text=" 输入内容 ", style="Card.TLabelframe")
+        input_lf.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+
+        input_text = tk.Text(input_lf, height=6, font=FONT_TEXT,
+                              relief="flat", bd=0, wrap="word",
+                              bg=CARD_BG, fg=TEXT_DARK,
+                              insertbackground=ACCENT,
+                              selectbackground="#bfdbfe",
+                              selectforeground=TEXT_DARK,
+                              padx=8, pady=6)
+        input_text.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # 按钮区域
+        btn_frame = tk.Frame(frame, bg=BG)
+        btn_frame.pack(fill="x", padx=8, pady=4)
+
+        status_label = tk.Label(btn_frame, text="", font=FONT_STATUS,
+                                 bg=BG, fg=TEXT_MUTED, anchor="w")
+        status_label.pack(side="left", fill="x", expand=True)
+
+        # 输出区域：容器 frame，内部按需放 Text 或 Treeview
+        output_lf = ttk.LabelFrame(frame, text=" 输出结果 ", style="Card.TLabelframe")
+        output_lf.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+        self.json_output_container = tk.Frame(output_lf, bg=CARD_BG)
+        self.json_output_container.pack(fill="both", expand=True, padx=4, pady=4)
+
+        def parse_input():
+            text = input_text.get("1.0", tk.END).strip()
+            if not text:
+                status_label.config(text="请输入 JSON 内容", fg=ERROR)
+                return None
+            try:
+                return json.loads(text)
+            except Exception as e:
+                status_label.config(text=f"JSON 解析失败：{e}", fg=ERROR)
+                return None
+
+        def show_text_output(result):
+            """清空输出容器，放入 Text 显示文本结果"""
+            for w in self.json_output_container.winfo_children():
+                w.destroy()
+            output_text = tk.Text(self.json_output_container,
+                                   font=FONT_TEXT, relief="flat", bd=0, wrap="word",
+                                   bg="#f8fafc", fg=TEXT_DARK, state="disabled",
+                                   padx=8, pady=6,
+                                   selectbackground="#bfdbfe",
+                                   selectforeground=TEXT_DARK)
+            scrollbar = ttk.Scrollbar(self.json_output_container,
+                                       command=output_text.yview)
+            output_text.config(yscrollcommand=scrollbar.set)
+            output_text.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            self._set_output_text(output_text, result)
+            self.json_output_text = output_text
+            self.json_tree = None
+
+        def show_tree_output(data):
+            """清空输出容器，放入 Treeview 显示树形表格"""
+            for w in self.json_output_container.winfo_children():
+                w.destroy()
+            style = ttk.Style()
+            style.configure("Json.Treeview",
+                             font=(FONT_FAMILY, 10),
+                             rowheight=24,
+                             background="#f8fafc",
+                             fieldbackground="#f8fafc",
+                             foreground=TEXT_DARK)
+            style.configure("Json.Treeview.Heading", font=FONT_LABEL)
+            tree = ttk.Treeview(self.json_output_container,
+                                 style="Json.Treeview", show="tree", selectmode="browse")
+            scrollbar = ttk.Scrollbar(self.json_output_container,
+                                       command=tree.yview)
+            tree.config(yscrollcommand=scrollbar.set)
+            tree.pack(side="left", fill="both", expand=True)
+            scrollbar.pack(side="right", fill="y")
+            root_node = tree.insert("", "end", text="root ▸", open=True)
+            _populate_tree(tree, root_node, data)
+            self.json_tree = tree
+            self.json_output_text = None
+
+        def get_output_text():
+            """获取当前输出内容（文本或树的文本表示），用于复制"""
+            if self.json_output_text is not None:
+                return self.json_output_text.get("1.0", tk.END).strip()
+            if self.json_tree is not None:
+                lines = []
+                def walk(item, depth):
+                    lines.append("  " * depth + self.json_tree.item(item, "text"))
+                    for child in self.json_tree.get_children(item):
+                        walk(child, depth + 1)
+                for item in self.json_tree.get_children(""):
+                    walk(item, 0)
+                return "\n".join(lines)
+            return ""
+
+        def do_format():
+            if parse_input() is None:
+                return
+            try:
+                result = json_format(input_text.get("1.0", tk.END).strip())
+                show_text_output(result)
+                status_label.config(text="格式化成功", fg=SUCCESS)
+            except Exception as e:
+                status_label.config(text=f"操作失败：{e}", fg=ERROR)
+
+        def do_table():
+            if parse_input() is None:
+                return
+            try:
+                result = json_to_table(input_text.get("1.0", tk.END).strip())
+                show_text_output(result)
+                status_label.config(text="转换表格成功", fg=SUCCESS)
+            except Exception as e:
+                status_label.config(text=f"操作失败：{e}", fg=ERROR)
+
+        def do_python():
+            if parse_input() is None:
+                return
+            try:
+                result = json_to_python(input_text.get("1.0", tk.END).strip())
+                show_text_output(result)
+                status_label.config(text="转换字典成功", fg=SUCCESS)
+            except Exception as e:
+                status_label.config(text=f"操作失败：{e}", fg=ERROR)
+
+        def do_tree():
+            data = parse_input()
+            if data is None:
+                return
+            show_tree_output(data)
+            status_label.config(text="树形表格已生成", fg=SUCCESS)
+
+        def copy_output():
+            text = get_output_text()
+            if text:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(text)
+                status_label.config(text="已复制到剪贴板", fg=INFO)
+
+        def clear_all():
+            input_text.delete("1.0", tk.END)
+            for w in self.json_output_container.winfo_children():
+                w.destroy()
+            self.json_output_text = None
+            self.json_tree = None
+            status_label.config(text="")
+
+        ttk.Button(btn_frame, text="复制结果",
+                    command=copy_output, style="Info.TButton").pack(side="right", padx=2)
+        ttk.Button(btn_frame, text="清空",
+                    command=clear_all, style="Muted.TButton").pack(side="right", padx=2)
+        ttk.Button(btn_frame, text="树形表格",
+                    command=do_tree, style="Muted.TButton").pack(side="right", padx=2)
+        ttk.Button(btn_frame, text="转字典",
+                    command=do_python, style="Info.TButton").pack(side="right", padx=2)
+        ttk.Button(btn_frame, text="转表格",
+                    command=do_table, style="Success.TButton").pack(side="right", padx=2)
+        ttk.Button(btn_frame, text="格式化",
+                    command=do_format, style="Accent.TButton").pack(side="right", padx=2)
+
+        # 初始空状态
+        self.json_output_text = None
+        self.json_tree = None
 
     def _create_tab(self, name, enc_fn, dec_fn, reversible, dec_label):
         frame = tk.Frame(self.notebook, bg=BG)
