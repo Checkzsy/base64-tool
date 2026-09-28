@@ -113,28 +113,49 @@ function selectTool(id, silent) {
   document.querySelectorAll(".nav-item").forEach(el =>
     el.classList.toggle("active", el.dataset.id === id));
 
-  // 面板切换动画：先移出再入场
-  const ws = $("workspace");
-  ws.style.animation = "none";
-  void ws.offsetWidth; // reflow 重启动画
-  ws.style.animation = "";
-
   $("tool-title").textContent = id;
   $("tool-desc").textContent = tool.desc;
 
-  // 渲染按钮
+  // 渲染按钮（容器一次性淡入，无逐个级联）
+  renderActions(tool);
+  clearOutput();
+  if (!silent) $("input").focus();
+}
+
+// ── 按钮渲染（含 JSON 附加按钮的动态注入）──
+// 当当前工具是 YAML 且输入是合法 JSON 时，附加 JSON 独有按钮
+const JSON_EXTRA_ACTIONS = [
+  { label: "JSON 转表格", key: "table", style: "green" },
+  { label: "JSON 转字典", key: "python", style: "purple" },
+  { label: "JSON 树形表格", key: "tree", style: "gray" },
+];
+
+function renderActions(tool) {
   const box = $("actions");
   box.innerHTML = "";
-  for (const act of tool.actions) {
+  let actions = tool.actions;
+  if (tool.id === "YAML" && isJsonText($("input").value)) {
+    actions = [...tool.actions, ...JSON_EXTRA_ACTIONS];
+  }
+  for (const act of actions) {
     const btn = document.createElement("button");
     btn.className = `action-btn ${act.style}`;
     btn.textContent = act.label;
     btn.addEventListener("click", () => runAction(act.key));
     box.appendChild(btn);
   }
+}
 
-  clearOutput();
-  if (!silent) $("input").focus();
+function isJsonText(text) {
+  if (!text || !text.trim()) return false;
+  const t = text.trim();
+  if (!(t.startsWith("{") || t.startsWith("["))) return false;
+  try {
+    JSON.parse(t);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // ── 执行动作 ──
@@ -153,11 +174,21 @@ async function runAction(key) {
     return;
   }
 
-  if (!res.ok) { toast(res.error || "操作失败", "error"); return; }
+  if (!res.ok) {
+    // 友好错误提示：toast 提示摘要，详细原因显示在输出区
+    toast("操作失败，详见输出区说明", "error");
+    $("output-card").classList.remove("tree-mode");
+    $("output").hidden = false;
+    $("tree").hidden = true;
+    $("output").value = "✗ " + (res.error || "操作失败");
+    $("output-card").hidden = false;
+    return;
+  }
 
   if (key === "tree") {
     renderTree(res.result);
   } else {
+    $("output-card").classList.remove("tree-mode");
     $("output").hidden = false;
     $("tree").hidden = true;
     $("output").value = typeof res.result === "string"
@@ -167,11 +198,12 @@ async function runAction(key) {
   toast("操作成功", "success");
 }
 
-// ── 树渲染（嵌套 details/summary）──
+// ── 树渲染（同层括号 + 折叠计数）──
 function renderTree(data) {
-  $("output").hidden = true;
+  $("output-card").classList.add("tree-mode");
+  $("output").hidden = true;   // 树模式下隐藏 textarea（双重保险，CSS 也会隐藏）
+  $("tree").hidden = false;    // 移除树容器的 hidden
   const box = $("tree");
-  box.hidden = false;
   box.innerHTML = "";
   box.appendChild(buildNode(data, null));
   $("output-card").hidden = false;
@@ -181,19 +213,47 @@ function buildNode(value, key) {
   const isObj = value && typeof value === "object";
 
   if (isObj) {
+    const isArray = Array.isArray(value);
+    const count = isArray ? value.length : Object.keys(value).length;
+    const openCh = isArray ? "[" : "{";
+    const closeCh = isArray ? "]" : "}";
+
     const details = document.createElement("details");
     details.open = true;
+
     const summary = document.createElement("summary");
     const arrow = document.createElement("span");
     arrow.className = "arrow";
     arrow.textContent = "▶";
     summary.appendChild(arrow);
     appendKey(summary, key);
-    summary.appendChild(document.createTextNode(
-      Array.isArray(value) ? `[${value.length} 项]` : `{${Object.keys(value).length} 项}`));
+    // 展开态：{ ；折叠态：{…n 项}
+    const openBracket = document.createElement("span");
+    openBracket.className = "bracket";
+    openBracket.textContent = openCh;
+    summary.appendChild(openBracket);
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.textContent = `${count} 项 ${closeCh}`;
+    summary.appendChild(badge);
+    // 折叠时显示徽标，展开时隐藏
+    const syncBadge = () => { badge.hidden = details.open; };
+    details.addEventListener("toggle", syncBadge);
+    syncBadge();
+
     details.appendChild(summary);
     for (const [k, v] of Object.entries(value))
-      details.appendChild(buildNode(v, Array.isArray(value) ? `[${k}]` : k));
+      details.appendChild(buildNode(v, isArray ? `[${k}]` : k));
+
+    // 闭括号行
+    const closeLine = document.createElement("div");
+    closeLine.className = "leaf";
+    closeLine.style.paddingLeft = "6px";
+    const close = document.createElement("span");
+    close.className = "bracket";
+    close.textContent = closeCh;
+    closeLine.appendChild(close);
+    details.appendChild(closeLine);
     return details;
   }
 
@@ -283,8 +343,19 @@ async function toggleTheme() {
 function bindGlobal() {
   $("theme-btn").addEventListener("click", toggleTheme);
 
+  // 传回输入：把当前结果送回输入框，便于连续多步处理
+  $("btn-toinput").addEventListener("click", () => {
+    const out = getOutputText();
+    if (!out) { toast("暂无结果可传回", "error"); return; }
+    $("input").value = out;
+    clearOutput();
+    renderActions(ALL_IDS[state.current]);  // 立即刷新（YAML→JSON 后解锁 JSON 按钮）
+    $("input").focus();
+    toast("已传回输入框", "success");
+  });
+
   $("btn-copy").addEventListener("click", async () => {
-    const out = $("output").hidden ? "" : $("output").value;
+    const out = getOutputText();
     if (!out) { toast("暂无结果可复制", "error"); return; }
     try {
       await navigator.clipboard.writeText(out);
@@ -318,11 +389,44 @@ function bindGlobal() {
       if (first) runAction(first.key);
     }
   });
+
+  // 输入变化时刷新动作按钮（YAML 工具下输入变合法 JSON 时动态解锁 JSON 按钮）
+  let inputDebounce = null;
+  $("input").addEventListener("input", () => {
+    clearTimeout(inputDebounce);
+    inputDebounce = setTimeout(() => {
+      renderActions(ALL_IDS[state.current]);
+    }, 250);
+  });
+}
+
+function getOutputText() {
+  // 树模式下导出层级文本，否则取输出框
+  if (!$("output-card").classList.contains("tree-mode")) return $("output").value;
+  const lines = [];
+  const walk = (el, depth) => {
+    for (const child of el.children) {
+      if (child.tagName === "SUMMARY") {
+        lines.push("  ".repeat(depth) + child.textContent.replace(/▶/g, "").trim());
+        const details = child.parentElement;
+        if (details.open) [...details.children].forEach(c => { if (c.tagName !== "SUMMARY") walk(c, depth + 1); });
+      } else if (child.tagName === "DETAILS") {
+        walk(child, depth);
+      } else {
+        lines.push("  ".repeat(depth) + child.textContent.trim());
+      }
+    }
+  };
+  walk($("tree"), 0);
+  return lines.join("\n");
 }
 
 function clearOutput() {
   $("output").value = "";
   $("tree").innerHTML = "";
+  $("output").hidden = false;
+  $("tree").hidden = true;
+  $("output-card").classList.remove("tree-mode");
   $("output-card").hidden = true;
 }
 

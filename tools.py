@@ -300,6 +300,28 @@ def json_to_yaml_text(text):
 #  工具动作路由（UI 无关，供 Tkinter / Web 两端复用）
 # ══════════════════════════════════════════════════════
 
+def _friendly_error(action_key, error):
+    """把常见解析异常翻译成中文友好提示"""
+    msg = str(error)
+    looks_like_yaml = msg.startswith(("Expected a key", "could not find expected", "mapping values"))
+    looks_like_json = msg.startswith(("Expecting value", "Expecting property name",
+                                      "Extra data", "Invalid control character",
+                                      "Unexpected UTF-8 BOM", "Unterminated string"))
+    # 输入疑似 YAML 却喂给了 JSON 动作（用户反馈的核心连用场景）
+    if looks_like_json and action_key == "json_to_yaml":
+        return ("输入内容不是合法的 JSON——看起来像 YAML（无引号键/无大括号）。\n"
+                "请改用「YAML 美化」或「YAML → JSON」，或检查后重试。\n原始错误：" + msg)
+    if looks_like_json:
+        if action_key == "yaml_to_json":
+            return "输入内容不是合法的 YAML（看起来更像 JSON，请改用「JSON → YAML」）：" + msg
+        return "JSON 解析失败，请检查格式（键和字符串需用双引号、不能有尾随逗号）：" + msg
+    if looks_like_yaml:
+        if action_key in ("json_to_yaml",):
+            return "输入内容不是合法的 JSON（看起来更像 YAML）：" + msg
+        return "YAML 解析失败，请检查缩进和冒号后空格：" + msg
+    return msg
+
+
 def run_tool_action(action_key, raw_text):
     """执行工具动作。返回 (ok, 结果)；
     失败返回 (False, 错误消息)。"""
@@ -350,7 +372,7 @@ def run_tool_action(action_key, raw_text):
             return True, json_to_yaml_text(raw_text)
         return False, f"未知操作：{action_key}"
     except Exception as e:
-        return False, str(e) or e.__class__.__name__
+        return False, _friendly_error(action_key, str(e) or e.__class__.__name__)
 
 
 # ══════════════════════════════════════════════════════
