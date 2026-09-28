@@ -19,34 +19,42 @@ os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 
 # 工具函数层（编解码/格式化纯函数 + 配置读写）已抽离到 tools.py
-from tools import (ENCODERS, YAML_AVAILABLE, base64_encode, base64_decode,
-                   url_encode, url_decode, html_encode, html_decode,
-                   unicode_encode, unicode_decode, hex_encode, hex_decode,
-                   md5_hash, sha256_hash, jwt_decode, json_format,
-                   json_to_python, json_to_table, xml_format, xml_compress,
-                   yaml_format, yaml_to_json_text, json_to_yaml_text,
-                   load_tab_order, save_tab_order, load_theme, save_theme,
-                   _config_path)
+from tools import ENCODERS, FORMATTERS, run_tool_action, load_tab_order, save_tab_order
 
 import json
 import tkinter as tk
 from tkinter import ttk
+
 # ══════════════════════════════════════════════════════
-#  配置
+#  树形视图（Treeview 专用，沿用旧实现）
 # ══════════════════════════════════════════════════════
 
-# 每种编码的配置：(显示名, 编码函数, 解码函数, 是否可逆, 解码按钮文字)
-# is_reversible=False 表示只有"编码/生成"操作
-ENCODERS = [
-    ("Base64",   base64_encode,   base64_decode,   True,  "解码"),
-    ("URL",      url_encode,      url_decode,      True,  "解码"),
-    ("HTML",     html_encode,     html_decode,     True,  "解码"),
-    ("Unicode",  unicode_encode,  unicode_decode,  True,  "解码"),
-    ("Hex",      hex_encode,      hex_decode,      True,  "解码"),
-    ("MD5",      md5_hash,        None,            False, ""),
-    ("SHA-256",  sha256_hash,     None,            False, ""),
-    ("JWT",      None,            jwt_decode,      False, "解析"),
-]
+def _populate_tree(tree, parent, data):
+    """递归填充 Treeview：容器节点可展开，叶子显示 key: 值"""
+    if isinstance(data, dict):
+        for k, v in data.items():
+            if isinstance(v, (dict, list)):
+                if not v:
+                    tree.insert(parent, "end", text=f"{k} : {json.dumps(v)}", open=False)
+                else:
+                    node = tree.insert(parent, "end", text=f"{k} ▸", open=True)
+                    _populate_tree(tree, node, v)
+            else:
+                tree.insert(parent, "end", text=f"{k} : {json.dumps(v, ensure_ascii=False)}", open=False)
+    elif isinstance(data, list):
+        for i, v in enumerate(data):
+            label = f"[{i}]"
+            if isinstance(v, (dict, list)):
+                if not v:
+                    tree.insert(parent, "end", text=f"{label} {json.dumps(v)}", open=False)
+                else:
+                    node = tree.insert(parent, "end", text=f"{label} ▸", open=True)
+                    _populate_tree(tree, node, v)
+            else:
+                tree.insert(parent, "end", text=f"{label} {json.dumps(v, ensure_ascii=False)}", open=False)
+    else:
+        tree.insert(parent, "end", text=json.dumps(data, ensure_ascii=False))
+
 
 # 颜色方案
 BG          = "#f0f2f5"
@@ -79,9 +87,6 @@ class EncodeApp:
         self.root.geometry("720x540")
         self.root.minsize(580, 420)
         self.root.configure(bg=BG)
-
-        # 每个 tab 的状态标签和输入输出框引用
-        self.tabs = {}
 
         # 每个 tab 的状态标签和输入输出框引用
         self.tabs = {}
@@ -276,7 +281,7 @@ class EncodeApp:
         """启动时按保存的顺序重排内层标签（无效则保持默认）"""
         group_names = {
             "encoders": [n for n, *_ in ENCODERS],
-            "formatters": ["JSON", "XML", "YAML"],
+            "formatters": list(FORMATTERS),
         }
         order = load_tab_order(group_names)
         for nb, key in ((self.enc_notebook, "encoders"),
@@ -289,10 +294,10 @@ class EncodeApp:
                     pos += 1
 
     def _reset_tab_order(self):
-        """恢复默认标签顺序并清除保存的配置"""
+        """恢复默认标签顺序并持久化（仅覆盖 tab_order 字段，不动主题）"""
         default = {
             "encoders": [n for n, *_ in ENCODERS],
-            "formatters": ["JSON", "XML", "YAML"],
+            "formatters": list(FORMATTERS),
         }
         for nb, key in ((self.enc_notebook, "encoders"),
                         (self.fmt_notebook, "formatters")):
@@ -303,10 +308,6 @@ class EncodeApp:
                     nb.insert(pos, tabs[name])
                     pos += 1
         save_tab_order(default)
-        try:
-            os.remove(_config_path())
-        except OSError:
-            pass
 
     def _create_tool_tab(self, notebook, name, actions):
         """通用多按钮工具 tab（JSON/XML/YAML 共用骨架）。
@@ -346,17 +347,6 @@ class EncodeApp:
 
         # 每 tab 独立的输出状态
         state = {"text": None, "tree": None}
-
-        def parse_json_input():
-            text = input_text.get("1.0", tk.END).strip()
-            if not text:
-                status_label.config(text="请输入 JSON 内容", fg=ERROR)
-                return None
-            try:
-                return json.loads(text)
-            except Exception as e:
-                status_label.config(text=f"JSON 解析失败：{e}", fg=ERROR)
-                return None
 
         def show_text_output(result):
             """清空输出容器，放入 Text 显示文本结果"""
@@ -418,7 +408,7 @@ class EncodeApp:
 
         def run_action(action_key):
             raw = input_text.get("1.0", tk.END).strip()
-            ok, result = self._run_tool_action(action_key, raw, parse_json_input)
+            ok, result = self._run_tool_action(action_key, raw)
             if not ok:
                 status_label.config(text=result, fg=ERROR)
                 return
@@ -456,44 +446,18 @@ class EncodeApp:
                         style=btn_style).pack(side="right", padx=2)
 
     @staticmethod
-    def _run_tool_action(action_key, raw_text, parse_json_input):
+    def _run_tool_action(action_key, raw_text):
         """执行工具动作。返回 (ok, 结果)；
-        树形视图返回 (True, ("__tree__", data))；失败返回 (False, 错误消息)。"""
-        try:
-            if action_key == "format":
-                return True, json_format(raw_text)
-            if action_key == "table":
-                return True, json_to_table(raw_text)
-            if action_key == "python":
-                return True, json_to_python(raw_text)
-            if action_key == "tree":
-                data = parse_json_input()
-                if data is None:
-                    return False, "JSON 解析失败"
-                return True, ("__tree__", data)
-            if action_key == "xml_format":
-                if not raw_text:
-                    return False, "请输入 XML 内容"
-                return True, xml_format(raw_text)
-            if action_key == "xml_compress":
-                if not raw_text:
-                    return False, "请输入 XML 内容"
-                return True, xml_compress(raw_text)
-            if action_key == "yaml_format":
-                if not raw_text:
-                    return False, "请输入 YAML 内容"
-                return True, yaml_format(raw_text)
-            if action_key == "yaml_to_json":
-                if not raw_text:
-                    return False, "请输入 YAML 内容"
-                return True, yaml_to_json_text(raw_text)
-            if action_key == "json_to_yaml":
-                if not raw_text:
-                    return False, "请输入 JSON 内容"
-                return True, json_to_yaml_text(raw_text)
-            return False, f"未知操作：{action_key}"
-        except Exception as e:
-            return False, f"操作失败：{e}"
+        树形视图返回 (True, ("__tree__", data))；失败返回 (False, 错误消息)。
+        委托给 tools.run_tool_action（共享路由 + 中文友好错误），
+        仅在此处理 Tkinter Treeview 特有的树数据结构包装。"""
+        if action_key == "tree":
+            # 树形视图：共享路由负责 JSON 解析与错误提示，成功后再包装成 Treeview 数据
+            ok, result = run_tool_action(action_key, raw_text)
+            if not ok:
+                return False, result
+            return True, ("__tree__", result)
+        return run_tool_action(action_key, raw_text)
 
     def _create_tab(self, notebook, name, enc_fn, dec_fn, reversible, dec_label):
         frame = tk.Frame(notebook, bg=BG)

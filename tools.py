@@ -10,6 +10,8 @@ import hashlib
 import html
 import json
 import os
+import unicodedata
+from functools import lru_cache
 
 
 # ══════════════════════════════════════════════════════
@@ -82,6 +84,9 @@ ENCODERS = [
     ("JWT",      None,            jwt_decode,      False, "解析"),
 ]
 
+# 格式化组：默认顺序（旧版 Tkinter 与 app.py 共用，避免常量多头维护）
+FORMATTERS = ["JSON", "XML", "YAML"]
+
 
 # ══════════════════════════════════════════════════════
 #  JSON
@@ -96,8 +101,7 @@ def json_format(text):
 def json_to_python(text):
     """将 JSON 转成 Python 字典字面量（True/False/None、单引号字符串）"""
     data = json.loads(text)
-    result, _ = _py_literal(data, 0)
-    return result
+    return _py_literal(data, 0)
 
 
 def _py_literal(value, depth):
@@ -106,39 +110,41 @@ def _py_literal(value, depth):
     child_indent = "    " * (depth + 1)
     if isinstance(value, dict):
         if not value:
-            return "{}", False
+            return "{}"
         items = []
         for k, v in value.items():
-            text, _ = _py_literal(v, depth + 1)
-            items.append(f"{child_indent}'{k}': {text}")
-        return "{\n" + ",\n".join(items) + f"\n{indent}}}", True
+            items.append(f"{child_indent}'{k}': {_py_literal(v, depth + 1)}")
+        return "{\n" + ",\n".join(items) + f"\n{indent}}}"
     if isinstance(value, list):
         if not value:
-            return "[]", False
+            return "[]"
         items = []
         for v in value:
-            text, _ = _py_literal(v, depth + 1)
-            items.append(f"{child_indent}{text}")
-        return "[\n" + ",\n".join(items) + f"\n{indent}]", True
+            items.append(f"{child_indent}{_py_literal(v, depth + 1)}")
+        return "[\n" + ",\n".join(items) + f"\n{indent}]"
+    return _literal_scalar(value)
+
+
+def _literal_scalar(value):
+    """将 JSON 标量转成 Python 字面量（bool/None/str/int/float）"""
     if value is True:
-        return "True", False
+        return "True"
     if value is False:
-        return "False", False
+        return "False"
     if value is None:
-        return "None", False
-    if isinstance(value, str):
-        return repr(value), False
-    # int / float
-    return repr(value), False
+        return "None"
+    return repr(value)
 
 
+def _char_width(ch):
+    """单字符显示宽度：中日韩等全角字符按 2 计算"""
+    return 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+
+
+@lru_cache(maxsize=2048)
 def _display_width(s):
     """计算字符串显示宽度：中日韩等全角字符按 2 计算"""
-    import unicodedata
-    width = 0
-    for ch in s:
-        width += 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
-    return width
+    return sum(_char_width(ch) for ch in s)
 
 
 def _pad(s, width):
@@ -169,12 +175,8 @@ def json_to_table(text):
         if not data:
             return "（空数组）"
         if all(isinstance(item, dict) for item in data):
-            # 键并集做表头（保持首次出现顺序）
-            headers = []
-            for item in data:
-                for k in item:
-                    if k not in headers:
-                        headers.append(k)
+            # 键并集做表头（dict.fromkeys 保持首次出现顺序且去重）
+            headers = list(dict.fromkeys(k for item in data for k in item))
             rows = [[_compact(item.get(k)) if k in item else "—" for k in headers]
                     for item in data]
         else:
@@ -212,11 +214,10 @@ def json_to_table(text):
 
 def _truncate(s, width):
     """按显示宽度截断字符串，末尾加省略号"""
-    import unicodedata
     out = ""
     w = 0
     for ch in s:
-        cw = 2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1
+        cw = _char_width(ch)
         if w + cw > width - 1:
             break
         out += ch
@@ -230,11 +231,8 @@ def _truncate(s, width):
 
 def xml_format(text):
     """格式化 XML：统一缩进美化（保留注释与声明）"""
-    import xml.etree.ElementTree as ET
     import xml.dom.minidom as minidom
-    # 先解析验证合法性
-    root = ET.fromstring(text)
-    # 用 minidom 美化（解析通过的文本重新走 minidom 拿缩进）
+    # minidom 解析即校验：非法 XML 会抛 ExpatError，由路由层统一转中文提示
     dom = minidom.parseString(text if isinstance(text, bytes) else text.encode("utf-8"))
     pretty = dom.toprettyxml(indent="  ", encoding=None)
     # 去掉 minidom 自动加的 <?xml version="1.0" ?>（若原文没有声明）
@@ -316,61 +314,47 @@ def _friendly_error(action_key, error):
             return "输入内容不是合法的 YAML（看起来更像 JSON，请改用「JSON → YAML」）：" + msg
         return "JSON 解析失败，请检查格式（键和字符串需用双引号、不能有尾随逗号）：" + msg
     if looks_like_yaml:
-        if action_key in ("json_to_yaml",):
+        if action_key == "json_to_yaml":
             return "输入内容不是合法的 JSON（看起来更像 YAML）：" + msg
         return "YAML 解析失败，请检查缩进和冒号后空格：" + msg
     return msg
 
 
+# 动作路由表：action key → 处理函数（tree 返回原始 JSON 数据，由前端渲染）
+_ACTIONS = {
+    "base64_encode": base64_encode,
+    "base64_decode": base64_decode,
+    "url_encode": url_encode,
+    "url_decode": url_decode,
+    "html_encode": html_encode,
+    "html_decode": html_decode,
+    "unicode_encode": unicode_encode,
+    "unicode_decode": unicode_decode,
+    "hex_encode": hex_encode,
+    "hex_decode": hex_decode,
+    "md5": md5_hash,
+    "sha256": sha256_hash,
+    "jwt_decode": jwt_decode,
+    "format": json_format,
+    "table": json_to_table,
+    "python": json_to_python,
+    "tree": json.loads,
+    "xml_format": xml_format,
+    "xml_compress": xml_compress,
+    "yaml_format": yaml_format,
+    "yaml_to_json": yaml_to_json_text,
+    "json_to_yaml": json_to_yaml_text,
+}
+
+
 def run_tool_action(action_key, raw_text):
     """执行工具动作。返回 (ok, 结果)；
     失败返回 (False, 错误消息)。"""
-    try:
-        if action_key == "base64_encode":
-            return True, base64_encode(raw_text)
-        if action_key == "base64_decode":
-            return True, base64_decode(raw_text)
-        if action_key == "url_encode":
-            return True, url_encode(raw_text)
-        if action_key == "url_decode":
-            return True, url_decode(raw_text)
-        if action_key == "html_encode":
-            return True, html_encode(raw_text)
-        if action_key == "html_decode":
-            return True, html_decode(raw_text)
-        if action_key == "unicode_encode":
-            return True, unicode_encode(raw_text)
-        if action_key == "unicode_decode":
-            return True, unicode_decode(raw_text)
-        if action_key == "hex_encode":
-            return True, hex_encode(raw_text)
-        if action_key == "hex_decode":
-            return True, hex_decode(raw_text)
-        if action_key == "md5":
-            return True, md5_hash(raw_text)
-        if action_key == "sha256":
-            return True, sha256_hash(raw_text)
-        if action_key == "jwt_decode":
-            return True, jwt_decode(raw_text)
-        if action_key == "format":
-            return True, json_format(raw_text)
-        if action_key == "table":
-            return True, json_to_table(raw_text)
-        if action_key == "python":
-            return True, json_to_python(raw_text)
-        if action_key == "tree":
-            return True, json.loads(raw_text)
-        if action_key == "xml_format":
-            return True, xml_format(raw_text)
-        if action_key == "xml_compress":
-            return True, xml_compress(raw_text)
-        if action_key == "yaml_format":
-            return True, yaml_format(raw_text)
-        if action_key == "yaml_to_json":
-            return True, yaml_to_json_text(raw_text)
-        if action_key == "json_to_yaml":
-            return True, json_to_yaml_text(raw_text)
+    fn = _ACTIONS.get(action_key)
+    if fn is None:
         return False, f"未知操作：{action_key}"
+    try:
+        return True, fn(raw_text)
     except Exception as e:
         return False, _friendly_error(action_key, str(e) or e.__class__.__name__)
 
@@ -400,13 +384,14 @@ def _read_config():
         return {}
 
 
-def load_tab_order(group_names, default=None):
+def load_tab_order(group_names, saved_order=None):
     """读取保存的标签顺序。返回与 group_names 对齐的 {组名: [标签名...]}，
-    无效/缺失的组回退为默认顺序。"""
+    无效/缺失的组回退为默认顺序。saved_order 可传入已读出的 tab_order 字典
+    （避免重复读文件），缺省时自行读取。"""
     defaults = {g: list(names) for g, names in group_names.items()}
-    saved = _read_config()
+    saved = saved_order if saved_order is not None else _read_config().get("tab_order", {})
     for group, names in defaults.items():
-        order = saved.get("tab_order", {}).get(group)
+        order = saved.get(group)
         # 只有当顺序恰好是同一组标签（无增删）时才采用
         if isinstance(order, list) and sorted(order) == sorted(names):
             defaults[group] = order
@@ -427,6 +412,15 @@ def load_theme():
 def save_theme(theme):
     """保存主题偏好（失败静默）"""
     _update_config(lambda data: data.update(theme=theme))
+
+
+def get_config():
+    """一次性读取整套配置：主题 + 分组标签顺序（单次文件读取）"""
+    data = _read_config()
+    theme = data.get("theme")
+    theme = theme if theme in ("dark", "light") else None
+    order = data.get("tab_order", {})
+    return {"theme": theme, "tab_order": order}
 
 
 def _update_config(mutator):

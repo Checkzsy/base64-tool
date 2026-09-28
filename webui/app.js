@@ -40,13 +40,22 @@ const TOOLS = {
     { id: "YAML",  desc: "YAML 美化 / YAML ⇄ JSON", actions: [
       { label: "YAML 美化", key: "yaml_format", style: "primary" },
       { label: "YAML → JSON", key: "yaml_to_json", style: "green" },
-      { label: "JSON → YAML", key: "json_to_yaml", style: "purple" } ] },
+      { label: "JSON → YAML", key: "json_to_yaml", style: "purple" } ],
+      // 当输入为合法 JSON 时，动态解锁 JSON 工具按钮（复用 JSON 工具定义）
+      dynamic: { when: isJsonText, actions: jsonExtraActions } },
   ],
 };
 
 const ALL_IDS = {};
 for (const g of Object.keys(TOOLS))
-  TOOLS[g].forEach((t, i) => { ALL_IDS[t.id] = { group: g, index: i, ...t }; });
+  TOOLS[g].forEach(t => { ALL_IDS[t.id] = t; });
+
+// YAML 动态解锁：输入为合法 JSON 时复用 JSON 工具的动作（引用同一份定义，不重复维护）。
+// 用函数声明（提升）以便 TOOLS 注册表可直接引用；函数体内的 ALL_IDS 为惰性求值。
+function jsonExtraActions() {
+  return ALL_IDS["JSON"].actions.filter(a => a.key !== "format")
+    .map(a => ({ ...a, label: `JSON ${a.label}` }));
+}
 
 // ── 全局状态 ──
 const state = {
@@ -70,18 +79,15 @@ window.addEventListener("DOMContentLoaded", async () => {
   selectTool("Base64", true);
 
   // 读配置：主题 + 顺序 + YAML 可用性
+  let cfg = null;
   try {
-    const cfg = await backend()?.get_config();
-    if (cfg) {
-      state.yamlAvailable = cfg.yamlAvailable !== false;
-      if (cfg.order) applyOrder(cfg.order);
-      initTheme(cfg.theme);
-    } else {
-      initTheme(null);
-    }
-  } catch {
-    initTheme(null);
+    cfg = await backend()?.get_config();
+  } catch {}
+  if (cfg) {
+    state.yamlAvailable = cfg.yamlAvailable !== false;
+    if (cfg.order) applyOrder(cfg.order);
   }
+  initTheme(cfg?.theme ?? null);
   if (!state.yamlAvailable) {
     TOOLS.formatters.find(t => t.id === "YAML").desc +=
       "（未安装 PyYAML，请先 pip install pyyaml）";
@@ -122,20 +128,15 @@ function selectTool(id, silent) {
   if (!silent) $("input").focus();
 }
 
-// ── 按钮渲染（含 JSON 附加按钮的动态注入）──
-// 当当前工具是 YAML 且输入是合法 JSON 时，附加 JSON 独有按钮
-const JSON_EXTRA_ACTIONS = [
-  { label: "JSON 转表格", key: "table", style: "green" },
-  { label: "JSON 转字典", key: "python", style: "purple" },
-  { label: "JSON 树形表格", key: "tree", style: "gray" },
-];
-
+// ── 按钮渲染（含动态按钮注入）──
+// 工具可通过 registry `dynamic: { when(input), actions() }` 声明条件按钮；
+// 由 input-to-render 时求值（YAML 工具在输入为合法 JSON 时附加 JSON 按钮）。
 function renderActions(tool) {
   const box = $("actions");
   box.innerHTML = "";
   let actions = tool.actions;
-  if (tool.id === "YAML" && isJsonText($("input").value)) {
-    actions = [...tool.actions, ...JSON_EXTRA_ACTIONS];
+  if (tool.dynamic && tool.dynamic.when($("input").value)) {
+    actions = [...tool.actions, ...tool.dynamic.actions()];
   }
   for (const act of actions) {
     const btn = document.createElement("button");
@@ -146,16 +147,22 @@ function renderActions(tool) {
   }
 }
 
+// 输入检查：仅当前工具带动态按钮（且输入变化）时才重算，避免每次按键整份 JSON.parse
+const _jsonCheckMemo = { text: "", ok: false };
 function isJsonText(text) {
   if (!text || !text.trim()) return false;
+  if (_jsonCheckMemo.text === text) return _jsonCheckMemo.ok;
   const t = text.trim();
-  if (!(t.startsWith("{") || t.startsWith("["))) return false;
-  try {
-    JSON.parse(t);
-    return true;
-  } catch {
-    return false;
-  }
+  const ok = (t.startsWith("{") || t.startsWith("[")) && (() => {
+    try { JSON.parse(t); return true; } catch { return false; }
+  })();
+  _jsonCheckMemo.text = text;
+  _jsonCheckMemo.ok = ok;
+  return ok;
+}
+
+function hasDynamic(tool) {
+  return !!(tool.dynamic && tool.dynamic.when);
 }
 
 // ── 执行动作 ──
@@ -177,32 +184,29 @@ async function runAction(key) {
   if (!res.ok) {
     // 友好错误提示：toast 提示摘要，详细原因显示在输出区
     toast("操作失败，详见输出区说明", "error");
-    $("output-card").classList.remove("tree-mode");
-    $("output").hidden = false;
-    $("tree").hidden = true;
-    $("output").value = "✗ " + (res.error || "操作失败");
-    $("output-card").hidden = false;
+    showOutputText("✗ " + (res.error || "操作失败"));
     return;
   }
 
   if (key === "tree") {
-    renderTree(res.result);
+    showTree(res.result);
   } else {
-    $("output-card").classList.remove("tree-mode");
-    $("output").hidden = false;
-    $("tree").hidden = true;
-    $("output").value = typeof res.result === "string"
-      ? res.result : JSON.stringify(res.result, null, 2);
+    showOutputText(typeof res.result === "string"
+      ? res.result : JSON.stringify(res.result, null, 2));
   }
-  $("output-card").hidden = false;
   toast("操作成功", "success");
 }
 
+// ── 输出区持有态：tool 类决定 textarea/树谁可见（CSS 负责显隐）──
+function showOutputText(text) {
+  $("output-card").classList.remove("tree-mode");
+  $("output").value = text;
+  $("output-card").hidden = false;
+}
+
 // ── 树渲染（同层括号 + 折叠计数）──
-function renderTree(data) {
+function showTree(data) {
   $("output-card").classList.add("tree-mode");
-  $("output").hidden = true;   // 树模式下隐藏 textarea（双重保险，CSS 也会隐藏）
-  $("tree").hidden = false;    // 移除树容器的 hidden
   const box = $("tree");
   box.innerHTML = "";
   box.appendChild(buildNode(data, null));
@@ -210,11 +214,9 @@ function renderTree(data) {
 }
 
 function buildNode(value, key) {
-  const isObj = value && typeof value === "object";
-
-  if (isObj) {
+  if (value && typeof value === "object") {
     const isArray = Array.isArray(value);
-    const count = isArray ? value.length : Object.keys(value).length;
+    const entries = Object.entries(value);
     const openCh = isArray ? "[" : "{";
     const closeCh = isArray ? "]" : "}";
 
@@ -234,7 +236,7 @@ function buildNode(value, key) {
     summary.appendChild(openBracket);
     const badge = document.createElement("span");
     badge.className = "badge";
-    badge.textContent = `${count} 项 ${closeCh}`;
+    badge.textContent = `${entries.length} 项 ${closeCh}`;
     summary.appendChild(badge);
     // 折叠时显示徽标，展开时隐藏
     const syncBadge = () => { badge.hidden = details.open; };
@@ -242,8 +244,11 @@ function buildNode(value, key) {
     syncBadge();
 
     details.appendChild(summary);
-    for (const [k, v] of Object.entries(value))
-      details.appendChild(buildNode(v, isArray ? `[${k}]` : k));
+    const frag = document.createDocumentFragment();
+    // 单次遍历 entries（无需 Object.keys 单独再数一遍）
+    for (const [k, v] of entries)
+      frag.appendChild(buildNode(v, isArray ? `[${k}]` : k));
+    details.appendChild(frag);
 
     // 闭括号行
     const closeLine = document.createElement("div");
@@ -276,6 +281,10 @@ function appendKey(parent, key) {
 }
 
 // ── 拖拽排序 ──
+const clearDropTargets = () =>
+  document.querySelectorAll(".nav-item.drop-target")
+    .forEach(el => el.classList.remove("drop-target"));
+
 function bindDrag(item, ul) {
   item.addEventListener("dragstart", e => {
     item.classList.add("dragging");
@@ -284,16 +293,14 @@ function bindDrag(item, ul) {
   });
   item.addEventListener("dragend", () => {
     item.classList.remove("dragging");
-    document.querySelectorAll(".nav-item.drop-target")
-      .forEach(el => el.classList.remove("drop-target"));
+    clearDropTargets();
     persistOrder();
   });
   item.addEventListener("dragover", e => {
     e.preventDefault();
     const dragging = ul.querySelector(".dragging");
     if (!dragging || dragging === item) return;
-    document.querySelectorAll(".nav-item.drop-target")
-      .forEach(el => el.classList.remove("drop-target"));
+    clearDropTargets();
     item.classList.add("drop-target");
     // 实时换位
     const rect = item.getBoundingClientRect();
@@ -390,9 +397,10 @@ function bindGlobal() {
     }
   });
 
-  // 输入变化时刷新动作按钮（YAML 工具下输入变合法 JSON 时动态解锁 JSON 按钮）
+  // 输入变化时刷新动作按钮（仅带 dynamic 的工具需要重算；其余工具按钮不变，跳过重建）
   let inputDebounce = null;
   $("input").addEventListener("input", () => {
+    if (!hasDynamic(ALL_IDS[state.current])) return;
     clearTimeout(inputDebounce);
     inputDebounce = setTimeout(() => {
       renderActions(ALL_IDS[state.current]);
@@ -424,8 +432,6 @@ function getOutputText() {
 function clearOutput() {
   $("output").value = "";
   $("tree").innerHTML = "";
-  $("output").hidden = false;
-  $("tree").hidden = true;
   $("output-card").classList.remove("tree-mode");
   $("output-card").hidden = true;
 }

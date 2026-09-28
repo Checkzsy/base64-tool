@@ -35,12 +35,14 @@ class Api:
 
     def get_config(self):
         """返回前端初始化所需的配置：主题偏好 + 分组内工具顺序"""
-        order = tools.load_tab_order({
+        cfg = tools.get_config()
+        group_names = {
             "encoders": [n for n, *_ in tools.ENCODERS],
-            "formatters": ["JSON", "XML", "YAML"],
-        })
+            "formatters": list(tools.FORMATTERS),
+        }
+        order = tools.load_tab_order(group_names, cfg["tab_order"])
         return {
-            "theme": tools.load_theme(),  # None = 跟随系统
+            "theme": cfg["theme"],  # None = 跟随系统
             "order": order,
             "yamlAvailable": tools.YAML_AVAILABLE,
         }
@@ -67,7 +69,10 @@ class Api:
 
 def get_ui_path():
     """webui 目录的绝对路径（兼容源码运行与 Nuitka 打包）"""
-    base = getattr(sys, "frozen", False) and os.path.dirname(sys.executable) or os.path.dirname(os.path.abspath(__file__))
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, "webui", "index.html")
 
 

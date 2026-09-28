@@ -11,3 +11,5 @@ __pycache__/
 *.dist/
 *.onefile-build/
 EncodeTool.exe
+ToolBox.exe
+ToolBox_new.exe

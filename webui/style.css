@@ -198,7 +198,6 @@ body {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  animation: fadeSlide var(--t-med) var(--ease);
 }
 
 .tool-title {
@@ -282,8 +281,6 @@ body {
 }
 
 .io-area::placeholder { color: var(--muted); opacity: .7; }
-
-.io-area.output { background: var(--io-bg); }
 
 /* ── 按钮行 ── */
 .actions {
@@ -410,10 +407,10 @@ body {
 
 .tree .key { color: var(--accent); }
 .tree .val { color: var(--success); }
-.tree .idx { color: var(--muted); }
 
-/* 树渲染后输出卡内不再显示 textarea */
+/* 输出卡内 textarea 与树由 .tree-mode 类决定显隐（CSS 唯一持有该状态） */
 .output-card.tree-mode .io-area { display: none; }
+.output-card.tree-mode .tree { display: block; }  /* 覆盖 #tree 的 hidden 属性 */
 .output-card:not(.tree-mode) .tree { display: none; }
 
 /* ── toast ── */
