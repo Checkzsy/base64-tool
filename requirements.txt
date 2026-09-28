@@ -1,3 +1,4 @@
-# Core: Python standard library only (tkinter, json, xml, ...).
-# Optional: PyYAML for the YAML tab (the app degrades gracefully without it).
+# Web UI (v3.0) runtime dependencies
+pywebview>=5.0
+# Optional: YAML tab support (the app degrades gracefully without it)
 PyYAML>=6.0
