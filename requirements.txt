@@ -1,2 +1,3 @@
-# This project uses Python standard library only (base64, tkinter).
-# No third-party packages required.
+# Core: Python standard library only (tkinter, json, xml, ...).
+# Optional: PyYAML for the YAML tab (the app degrades gracefully without it).
+PyYAML>=6.0

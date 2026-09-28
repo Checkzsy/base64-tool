@@ -1,6 +1,6 @@
 # EncodeTool
 
-**A comprehensive 9-in-1 encoding/decoding desktop toolbox built with Python and Tkinter.**
+**A comprehensive 11-in-1 encoding/decoding & formatting desktop toolbox built with Python and Tkinter.**
 
 ---
 
@@ -8,15 +8,17 @@
 
 **中文**
 
-一个基于 Python + Tkinter 构建的本地编码解码桌面工具箱，集成 9 种常用编解码/数据处理功能，零第三方依赖，开箱即用。
+一个基于 Python + Tkinter 构建的本地编码解码桌面工具箱，按「编解码 / 格式化」两个功能区分组，共集成 11 种常用工具。标签页支持拖动排序（自动记忆），开箱即用。
 
 **English**
 
-A local encoding/decoding desktop toolbox built with Python and Tkinter, integrating 9 common encode/decode and data-processing functions. No third-party dependencies required — works out of the box.
+A local encoding/decoding & formatting desktop toolbox built with Python and Tkinter, grouping 11 tools into two sections (Encode/Decode, Format). Tabs are drag-to-reorder (position remembered). Works out of the box.
 
 ---
 
 ## 功能 / Features
+
+### 编解码 / Encode & Decode
 
 | 功能 | Feature |
 |---|---|
@@ -28,7 +30,18 @@ A local encoding/decoding desktop toolbox built with Python and Tkinter, integra
 | MD5 哈希生成 | MD5 hash generation |
 | SHA-256 哈希生成 | SHA-256 hash generation |
 | JWT 解析 | JWT payload parsing |
+
+### 格式化 / Format
+
+| 功能 | Feature |
+|---|---|
 | JSON 格式化 / 转表格 / 转字典 / 树形视图 | JSON format / to-table / to-Python-dict / tree view |
+| XML 格式化 / 压缩 | XML pretty-print / minify |
+| YAML 美化 / YAML ⇄ JSON | YAML format / YAML ⇄ JSON *(需 PyYAML / requires PyYAML)* |
+
+### 其他特性 / Extras
+
+- 标签页拖动排序，顺序自动保存（`%APPDATA%\EncodeTool\config.json`），可用「↺ 重置顺序」恢复默认 / Drag-to-reorder tabs, persisted and resettable
 
 ---
 
@@ -74,8 +87,9 @@ python -m nuitka --standalone --onefile --windows-disable-console --enable-plugi
 
 ```
 base64-tool/
-├── encode_tool.py     # 主程序（9合1版本）/ Main application (v2.1)
+├── encode_tool.py     # 主程序（11合1版本）/ Main application (v2.2)
 ├── base64_tool.py     # 旧版（仅Base64）/ Legacy Base64-only version
+├── icon.ico           # 应用图标 / App icon
 ├── requirements.txt   # 依赖说明 / Dependencies
 ├── LICENSE            # MIT License
 └── README.md
@@ -96,6 +110,8 @@ base64-tool/
 | SHA-256 | `hashlib.sha256` | *(单向哈希 / one-way)* |
 | JWT | — | `base64.urlsafe_b64decode` + `json.loads` |
 | JSON | `json.dumps(indent=2)` | `json.loads` / Treeview 树形视图 |
+| XML | `xml.dom.minidom` / `xml.etree` | *(单向格式化 / formatting only)* |
+| YAML | `yaml.dump`（PyYAML） | `yaml.safe_load`（PyYAML） |
 
 ---
 

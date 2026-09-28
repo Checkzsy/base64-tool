@@ -244,6 +244,115 @@ def _populate_tree(tree, parent, data):
         tree.insert(parent, "end", text=json.dumps(data, ensure_ascii=False))
 
 
+def xml_format(text):
+    """格式化 XML：统一缩进美化（保留注释与声明）"""
+    import xml.etree.ElementTree as ET
+    import xml.dom.minidom as minidom
+    # 先解析验证合法性
+    root = ET.fromstring(text)
+    # 用 minidom 美化（解析通过的文本重新走 minidom 拿缩进）
+    dom = minidom.parseString(text if isinstance(text, bytes) else text.encode("utf-8"))
+    pretty = dom.toprettyxml(indent="  ", encoding=None)
+    # 去掉 minidom 自动加的 <?xml version="1.0" ?>（若原文没有声明）
+    lines = [ln for ln in pretty.splitlines() if ln.strip()]
+    if not text.lstrip().startswith("<?xml") and lines and lines[0].startswith("<?xml"):
+        lines = lines[1:]
+    return "\n".join(lines)
+
+
+def xml_compress(text):
+    """压缩 XML：去除元素间空白与缩进，输出单行（元素内文本保留）"""
+    import re
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(text)
+    # 清除纯空白文本/尾随空白节点
+    for elem in root.iter():
+        if elem.text and not elem.text.strip():
+            elem.text = None
+        if elem.tail and not elem.tail.strip():
+            elem.tail = None
+    return re.sub(r">\s+<", "><", ET.tostring(root, encoding="unicode"))
+
+
+# 尝试导入 PyYAML（可选依赖：未安装时 YAML 功能给出友好提示）
+try:
+    import yaml as _yaml
+    YAML_AVAILABLE = True
+except ImportError:
+    _yaml = None
+    YAML_AVAILABLE = False
+
+
+def _require_yaml():
+    if not YAML_AVAILABLE:
+        raise ValueError("未安装 PyYAML，请先执行：pip install pyyaml")
+
+
+def yaml_format(text):
+    """格式化 YAML：重新序列化统一缩进"""
+    _require_yaml()
+    data = _yaml.safe_load(text)
+    return _yaml.dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+def yaml_to_json_text(text):
+    """YAML → JSON 格式化输出"""
+    _require_yaml()
+    data = _yaml.safe_load(text)
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+def json_to_yaml_text(text):
+    """JSON → YAML 输出"""
+    _require_yaml()
+    data = json.loads(text)
+    return _yaml.dump(data, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+# ── 标签顺序持久化 ──────────────────────────────────
+
+def _config_path():
+    """配置文件路径：%APPDATA%\\EncodeTool\\config.json"""
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "EncodeTool", "config.json")
+
+
+def load_tab_order(group_names, default=None):
+    """读取保存的标签顺序。返回与 group_names 对齐的 {组名: [标签名...]}，
+    无效/缺失的组回退为默认顺序。"""
+    defaults = {g: list(names) for g, names in group_names.items()}
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        for group, names in defaults.items():
+            order = saved.get("tab_order", {}).get(group)
+            # 只有当顺序恰好是同一组标签（无增删）时才采用
+            if isinstance(order, list) and sorted(order) == sorted(names):
+                defaults[group] = order
+    except Exception:
+        pass
+    return defaults
+
+
+def save_tab_order(order):
+    """保存标签顺序到配置文件（失败静默，不影响退出）"""
+    try:
+        path = _config_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        # 读旧配置合并（保留其他字段）
+        data = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            pass
+        data["tab_order"] = order
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 # ══════════════════════════════════════════════════════
 #  配置
 # ══════════════════════════════════════════════════════
@@ -301,6 +410,13 @@ class EncodeApp:
 
         self._setup_style()
         self._build_ui()
+
+        # 关闭窗口时保存内层标签顺序
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        save_tab_order(self._current_tab_order())
+        self.root.destroy()
 
     def _setup_style(self):
         style = ttk.Style()
@@ -373,20 +489,60 @@ class EncodeApp:
         tk.Label(header, text="EncodeTool",
                  font=(FONT_FAMILY, 14, "bold"),
                  bg=ACCENT, fg="white").pack(side="left", padx=16)
-        tk.Label(header, text="9合1 编码解码工具箱",
+        tk.Label(header, text="11合1 编码解码工具箱",
                  font=(FONT_FAMILY, 10),
                  bg=ACCENT, fg="#bfdbfe").pack(side="left")
 
-        # Notebook
+        # 外层分组 Notebook（编解码 / 格式化，固定顺序）
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=12, pady=(8, 12))
 
-        # 创建每个 Tab
-        for name, enc_fn, dec_fn, reversible, dec_label in ENCODERS:
-            self._create_tab(name, enc_fn, dec_fn, reversible, dec_label)
+        # 内层：编解码组
+        enc_frame = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(enc_frame, text="  编解码  ")
+        self.enc_notebook = ttk.Notebook(enc_frame)
+        self.enc_notebook.pack(fill="both", expand=True, padx=4, pady=4)
 
-        # JSON tab（独立构建，带树形表格视图）
-        self._create_json_tab()
+        # 内层：格式化组
+        fmt_frame = tk.Frame(self.notebook, bg=BG)
+        self.notebook.add(fmt_frame, text="  格式化  ")
+        self.fmt_notebook = ttk.Notebook(fmt_frame)
+        self.fmt_notebook.pack(fill="both", expand=True, padx=4, pady=4)
+
+        # 创建编解码 Tab
+        for name, enc_fn, dec_fn, reversible, dec_label in ENCODERS:
+            self._create_tab(self.enc_notebook, name, enc_fn, dec_fn, reversible, dec_label)
+
+        # 创建格式化 Tab（多按钮工具共用骨架）
+        self._create_tool_tab(self.fmt_notebook, "JSON", [
+            ("格式化", "format", "Accent.TButton"),
+            ("转表格", "table", "Success.TButton"),
+            ("转字典", "python", "Info.TButton"),
+            ("树形表格", "tree", "Muted.TButton"),
+        ])
+        self._create_tool_tab(self.fmt_notebook, "XML", [
+            ("格式化", "xml_format", "Accent.TButton"),
+            ("压缩", "xml_compress", "Success.TButton"),
+        ])
+        self._create_tool_tab(self.fmt_notebook, "YAML", [
+            ("YAML 美化", "yaml_format", "Accent.TButton"),
+            ("YAML → JSON", "yaml_to_json", "Success.TButton"),
+            ("JSON → YAML", "json_to_yaml", "Info.TButton"),
+        ])
+
+        # 内层标签拖拽排序（编解码组与格式化组）
+        for nb in (self.enc_notebook, self.fmt_notebook):
+            self._enable_tab_drag(nb)
+
+        # 启动时恢复上次保存的标签顺序
+        self._restore_tab_order()
+
+        # 外层分组旁放 Reset 按钮（恢复默认内层顺序）
+        reset_bar = tk.Frame(self.root, bg=BG)
+        # 用 place 贴在 Notebook 右上角
+        reset_bar.place(relx=1.0, y=6, anchor="ne", x=-16)
+        ttk.Button(reset_bar, text="↺ 重置顺序", style="Muted.TButton",
+                    command=self._reset_tab_order).pack()
 
     def _set_output_text(self, output_text, result):
         """往 Text 输出框写入结果"""
@@ -395,9 +551,93 @@ class EncodeApp:
         output_text.insert("1.0", result)
         output_text.config(state="disabled")
 
-    def _create_json_tab(self):
-        frame = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(frame, text="  JSON  ")
+    # ── 标签拖拽排序 + 持久化 ────────────────────────
+
+    def _enable_tab_drag(self, notebook):
+        """给内层 Notebook 绑定标签拖拽换位事件"""
+        state = {"pressed_index": None}
+
+        def on_press(event):
+            try:
+                state["pressed_index"] = notebook.index(f"@{event.x},{event.y}")
+            except tk.TclError:
+                state["pressed_index"] = None
+
+        def on_motion(event):
+            src = state["pressed_index"]
+            if src is None:
+                return
+            try:
+                dst = notebook.index(f"@{event.x},{event.y}")
+            except tk.TclError:
+                return
+            if dst == src:
+                return
+            # 换位并保持选中跟随拖动的标签
+            notebook.insert(src, dst)
+            notebook.select(dst)
+            state["pressed_index"] = dst
+
+        def on_release(event):
+            state["pressed_index"] = None
+
+        notebook.bind("<ButtonPress-1>", on_press, add="+")
+        notebook.bind("<B1-Motion>", on_motion, add="+")
+        notebook.bind("<ButtonRelease-1>", on_release, add="+")
+
+    def _current_tab_order(self):
+        """读取两个内层 Notebook 的当前标签顺序"""
+        def names(nb):
+            return [nb.tab(t, "text").strip() for t in nb.tabs()]
+        return {
+            "encoders": names(self.enc_notebook),
+            "formatters": names(self.fmt_notebook),
+        }
+
+    def _restore_tab_order(self):
+        """启动时按保存的顺序重排内层标签（无效则保持默认）"""
+        group_names = {
+            "encoders": [n for n, *_ in ENCODERS],
+            "formatters": ["JSON", "XML", "YAML"],
+        }
+        order = load_tab_order(group_names)
+        for nb, key in ((self.enc_notebook, "encoders"),
+                        (self.fmt_notebook, "formatters")):
+            tabs = {nb.tab(t, "text").strip(): t for t in nb.tabs()}
+            pos = 0
+            for name in order.get(key, []):
+                if name in tabs:
+                    nb.insert(pos, tabs[name])
+                    pos += 1
+
+    def _reset_tab_order(self):
+        """恢复默认标签顺序并清除保存的配置"""
+        default = {
+            "encoders": [n for n, *_ in ENCODERS],
+            "formatters": ["JSON", "XML", "YAML"],
+        }
+        for nb, key in ((self.enc_notebook, "encoders"),
+                        (self.fmt_notebook, "formatters")):
+            tabs = {nb.tab(t, "text").strip(): t for t in nb.tabs()}
+            pos = 0
+            for name in default[key]:
+                if name in tabs:
+                    nb.insert(pos, tabs[name])
+                    pos += 1
+        save_tab_order(default)
+        try:
+            os.remove(_config_path())
+        except OSError:
+            pass
+
+    def _create_tool_tab(self, notebook, name, actions):
+        """通用多按钮工具 tab（JSON/XML/YAML 共用骨架）。
+
+        actions: [(按钮文字, 动作key, 按钮样式), ...]
+        动作key 由 _run_tool_action 解释。
+        """
+        frame = tk.Frame(notebook, bg=BG)
+        notebook.add(frame, text=f"  {name}  ")
 
         # 输入区域
         input_lf = ttk.LabelFrame(frame, text=" 输入内容 ", style="Card.TLabelframe")
@@ -423,10 +663,13 @@ class EncodeApp:
         # 输出区域：容器 frame，内部按需放 Text 或 Treeview
         output_lf = ttk.LabelFrame(frame, text=" 输出结果 ", style="Card.TLabelframe")
         output_lf.pack(fill="both", expand=True, padx=8, pady=(4, 8))
-        self.json_output_container = tk.Frame(output_lf, bg=CARD_BG)
-        self.json_output_container.pack(fill="both", expand=True, padx=4, pady=4)
+        output_container = tk.Frame(output_lf, bg=CARD_BG)
+        output_container.pack(fill="both", expand=True, padx=4, pady=4)
 
-        def parse_input():
+        # 每 tab 独立的输出状态
+        state = {"text": None, "tree": None}
+
+        def parse_json_input():
             text = input_text.get("1.0", tk.END).strip()
             if not text:
                 status_label.config(text="请输入 JSON 内容", fg=ERROR)
@@ -439,98 +682,74 @@ class EncodeApp:
 
         def show_text_output(result):
             """清空输出容器，放入 Text 显示文本结果"""
-            for w in self.json_output_container.winfo_children():
+            for w in output_container.winfo_children():
                 w.destroy()
-            output_text = tk.Text(self.json_output_container,
+            output_text = tk.Text(output_container,
                                    font=FONT_TEXT, relief="flat", bd=0, wrap="word",
                                    bg="#f8fafc", fg=TEXT_DARK, state="disabled",
                                    padx=8, pady=6,
                                    selectbackground="#bfdbfe",
                                    selectforeground=TEXT_DARK)
-            scrollbar = ttk.Scrollbar(self.json_output_container,
+            scrollbar = ttk.Scrollbar(output_container,
                                        command=output_text.yview)
             output_text.config(yscrollcommand=scrollbar.set)
             output_text.pack(side="left", fill="both", expand=True)
             scrollbar.pack(side="right", fill="y")
             self._set_output_text(output_text, result)
-            self.json_output_text = output_text
-            self.json_tree = None
+            state["text"] = output_text
+            state["tree"] = None
 
         def show_tree_output(data):
             """清空输出容器，放入 Treeview 显示树形表格"""
-            for w in self.json_output_container.winfo_children():
+            for w in output_container.winfo_children():
                 w.destroy()
             style = ttk.Style()
-            style.configure("Json.Treeview",
+            style.configure("Tool.Treeview",
                              font=(FONT_FAMILY, 10),
                              rowheight=24,
                              background="#f8fafc",
                              fieldbackground="#f8fafc",
                              foreground=TEXT_DARK)
-            style.configure("Json.Treeview.Heading", font=FONT_LABEL)
-            tree = ttk.Treeview(self.json_output_container,
-                                 style="Json.Treeview", show="tree", selectmode="browse")
-            scrollbar = ttk.Scrollbar(self.json_output_container,
+            tree = ttk.Treeview(output_container,
+                                 style="Tool.Treeview", show="tree", selectmode="browse")
+            scrollbar = ttk.Scrollbar(output_container,
                                        command=tree.yview)
             tree.config(yscrollcommand=scrollbar.set)
             tree.pack(side="left", fill="both", expand=True)
             scrollbar.pack(side="right", fill="y")
             root_node = tree.insert("", "end", text="root ▸", open=True)
             _populate_tree(tree, root_node, data)
-            self.json_tree = tree
-            self.json_output_text = None
+            state["tree"] = tree
+            state["text"] = None
 
         def get_output_text():
             """获取当前输出内容（文本或树的文本表示），用于复制"""
-            if self.json_output_text is not None:
-                return self.json_output_text.get("1.0", tk.END).strip()
-            if self.json_tree is not None:
+            if state["text"] is not None:
+                return state["text"].get("1.0", tk.END).strip()
+            if state["tree"] is not None:
+                tree = state["tree"]
                 lines = []
                 def walk(item, depth):
-                    lines.append("  " * depth + self.json_tree.item(item, "text"))
-                    for child in self.json_tree.get_children(item):
+                    lines.append("  " * depth + tree.item(item, "text"))
+                    for child in tree.get_children(item):
                         walk(child, depth + 1)
-                for item in self.json_tree.get_children(""):
+                for item in tree.get_children(""):
                     walk(item, 0)
                 return "\n".join(lines)
             return ""
 
-        def do_format():
-            if parse_input() is None:
+        def run_action(action_key):
+            raw = input_text.get("1.0", tk.END).strip()
+            ok, result = self._run_tool_action(action_key, raw, parse_json_input)
+            if not ok:
+                status_label.config(text=result, fg=ERROR)
                 return
-            try:
-                result = json_format(input_text.get("1.0", tk.END).strip())
+            if isinstance(result, tuple) and result[0] == "__tree__":
+                show_tree_output(result[1])
+                status_label.config(text="树形表格已生成", fg=SUCCESS)
+            else:
                 show_text_output(result)
-                status_label.config(text="格式化成功", fg=SUCCESS)
-            except Exception as e:
-                status_label.config(text=f"操作失败：{e}", fg=ERROR)
-
-        def do_table():
-            if parse_input() is None:
-                return
-            try:
-                result = json_to_table(input_text.get("1.0", tk.END).strip())
-                show_text_output(result)
-                status_label.config(text="转换表格成功", fg=SUCCESS)
-            except Exception as e:
-                status_label.config(text=f"操作失败：{e}", fg=ERROR)
-
-        def do_python():
-            if parse_input() is None:
-                return
-            try:
-                result = json_to_python(input_text.get("1.0", tk.END).strip())
-                show_text_output(result)
-                status_label.config(text="转换字典成功", fg=SUCCESS)
-            except Exception as e:
-                status_label.config(text=f"操作失败：{e}", fg=ERROR)
-
-        def do_tree():
-            data = parse_input()
-            if data is None:
-                return
-            show_tree_output(data)
-            status_label.config(text="树形表格已生成", fg=SUCCESS)
+                status_label.config(text="操作成功", fg=SUCCESS)
 
         def copy_output():
             text = get_output_text()
@@ -541,32 +760,66 @@ class EncodeApp:
 
         def clear_all():
             input_text.delete("1.0", tk.END)
-            for w in self.json_output_container.winfo_children():
+            for w in output_container.winfo_children():
                 w.destroy()
-            self.json_output_text = None
-            self.json_tree = None
+            state["text"] = None
+            state["tree"] = None
             status_label.config(text="")
 
+        # 固定按钮（右侧）：复制、清空
         ttk.Button(btn_frame, text="复制结果",
                     command=copy_output, style="Info.TButton").pack(side="right", padx=2)
         ttk.Button(btn_frame, text="清空",
                     command=clear_all, style="Muted.TButton").pack(side="right", padx=2)
-        ttk.Button(btn_frame, text="树形表格",
-                    command=do_tree, style="Muted.TButton").pack(side="right", padx=2)
-        ttk.Button(btn_frame, text="转字典",
-                    command=do_python, style="Info.TButton").pack(side="right", padx=2)
-        ttk.Button(btn_frame, text="转表格",
-                    command=do_table, style="Success.TButton").pack(side="right", padx=2)
-        ttk.Button(btn_frame, text="格式化",
-                    command=do_format, style="Accent.TButton").pack(side="right", padx=2)
+        # 动作按钮（右侧依次往左）
+        for label, action_key, btn_style in reversed(actions):
+            ttk.Button(btn_frame, text=label,
+                        command=lambda k=action_key: run_action(k),
+                        style=btn_style).pack(side="right", padx=2)
 
-        # 初始空状态
-        self.json_output_text = None
-        self.json_tree = None
+    @staticmethod
+    def _run_tool_action(action_key, raw_text, parse_json_input):
+        """执行工具动作。返回 (ok, 结果)；
+        树形视图返回 (True, ("__tree__", data))；失败返回 (False, 错误消息)。"""
+        try:
+            if action_key == "format":
+                return True, json_format(raw_text)
+            if action_key == "table":
+                return True, json_to_table(raw_text)
+            if action_key == "python":
+                return True, json_to_python(raw_text)
+            if action_key == "tree":
+                data = parse_json_input()
+                if data is None:
+                    return False, "JSON 解析失败"
+                return True, ("__tree__", data)
+            if action_key == "xml_format":
+                if not raw_text:
+                    return False, "请输入 XML 内容"
+                return True, xml_format(raw_text)
+            if action_key == "xml_compress":
+                if not raw_text:
+                    return False, "请输入 XML 内容"
+                return True, xml_compress(raw_text)
+            if action_key == "yaml_format":
+                if not raw_text:
+                    return False, "请输入 YAML 内容"
+                return True, yaml_format(raw_text)
+            if action_key == "yaml_to_json":
+                if not raw_text:
+                    return False, "请输入 YAML 内容"
+                return True, yaml_to_json_text(raw_text)
+            if action_key == "json_to_yaml":
+                if not raw_text:
+                    return False, "请输入 JSON 内容"
+                return True, json_to_yaml_text(raw_text)
+            return False, f"未知操作：{action_key}"
+        except Exception as e:
+            return False, f"操作失败：{e}"
 
-    def _create_tab(self, name, enc_fn, dec_fn, reversible, dec_label):
-        frame = tk.Frame(self.notebook, bg=BG)
-        self.notebook.add(frame, text=f"  {name}  ")
+    def _create_tab(self, notebook, name, enc_fn, dec_fn, reversible, dec_label):
+        frame = tk.Frame(notebook, bg=BG)
+        notebook.add(frame, text=f"  {name}  ")
 
         # 输入区域
         input_lf = ttk.LabelFrame(frame, text=" 输入内容 ", style="Card.TLabelframe")
