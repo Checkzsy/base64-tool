@@ -104,6 +104,299 @@ def json_to_python(text):
     return _py_literal(data, 0)
 
 
+def python_to_json(text):
+    """将 Python 字典字面量转回 JSON 并美化。
+    非字面量输入（dataclass/对象 repr，如 Flow(id='x', steps=[...])）走 repr 解析器回退。"""
+    import ast
+    try:
+        data = ast.literal_eval(text)
+    except (ValueError, SyntaxError):
+        data = _ReprParser(text).parse()
+    return json.dumps(data, indent=2, ensure_ascii=False)
+
+
+class _ReprParser:
+    """把 Python 对象 repr 文本解析回数据结构。
+
+    支持：dict/list/tuple/set、字符串/数字/True/False/None、
+    构造器表示 ClassName(field=value) -> {"_type": "ClassName", ...}、
+    枚举表示 <Enum.VALUE: 'value'> -> 'value'。
+    """
+
+    _WS = " \t\n\r"
+
+    def __init__(self, text):
+        self.s = text
+        self.i = 0
+        self.n = len(text)
+
+    def parse(self):
+        value = self._value()
+        self._skip_ws()
+        if self.i < self.n:
+            raise ValueError(f"输入在第 {self.i} 字符处有剩余内容")
+        return value
+
+    def _skip_ws(self):
+        while self.i < self.n and self.s[self.i] in self._WS:
+            self.i += 1
+
+    def _value(self):
+        self._skip_ws()
+        if self.i >= self.n:
+            raise ValueError("输入意外结束")
+        c = self.s[self.i]
+        if c in "'\"":
+            return self._string()
+        if c == "[":
+            return self._list()
+        if c == "{":
+            return self._dict_or_set()
+        if c == "(":
+            return self._tuple()
+        if c == "<":
+            return self._enum()
+        return self._atom()
+
+    def _string(self):
+        # 完整字符串 token（含转义），交给 literal_eval 还原
+        quote = self.s[self.i]
+        j = self.i + 1
+        while j < self.n:
+            if self.s[j] == "\\":
+                j += 2
+                continue
+            if self.s[j] == quote:
+                break
+            j += 1
+        if j >= self.n:
+            raise ValueError("字符串未闭合")
+        token = self.s[self.i:j + 1]
+        self.i = j + 1
+        import ast
+        return ast.literal_eval(token)
+
+    def _list(self):
+        self.i += 1  # [
+        items = []
+        self._skip_ws()
+        if self.i < self.n and self.s[self.i] == "]":
+            self.i += 1
+            return items
+        while True:
+            items.append(self._value())
+            self._skip_ws()
+            if self.i >= self.n:
+                raise ValueError("列表未闭合")
+            if self.s[self.i] == "]":
+                self.i += 1
+                return items
+            if self.s[self.i] == ",":
+                self.i += 1
+            else:
+                raise ValueError("列表元素间缺少逗号")
+
+    def _tuple(self):
+        self.i += 1  # (
+        items = []
+        self._skip_ws()
+        if self.i < self.n and self.s[self.i] == ")":
+            self.i += 1
+            return items
+        while True:
+            items.append(self._value())
+            self._skip_ws()
+            if self.i >= self.n:
+                raise ValueError("元组未闭合")
+            if self.s[self.i] == ")":
+                self.i += 1
+                return items
+            if self.s[self.i] == ",":
+                self.i += 1
+                self._skip_ws()
+                # 允许尾随逗号后直接闭合：(1,)
+                if self.i < self.n and self.s[self.i] == ")":
+                    self.i += 1
+                    return items
+            else:
+                raise ValueError("元组元素间缺少逗号")
+
+    def _dict_or_set(self):
+        self.i += 1  # {
+        self._skip_ws()
+        if self.i < self.n and self.s[self.i] == "}":
+            self.i += 1
+            return {}
+        # 先解析首个元素判断是 dict 还是 set
+        first = self._value()
+        self._skip_ws()
+        if self.i < self.n and self.s[self.i] == ":":
+            # dict
+            self.i += 1
+            result = {self._hashable(first): self._value()}
+            while True:
+                self._skip_ws()
+                if self.i >= self.n:
+                    raise ValueError("字典未闭合")
+                if self.s[self.i] == "}":
+                    self.i += 1
+                    return result
+                if self.s[self.i] == ",":
+                    self.i += 1
+                    self._skip_ws()
+                    if self.i < self.n and self.s[self.i] == "}":
+                        self.i += 1
+                        return result
+                    key = self._value()
+                    self._skip_ws()
+                    if self.i >= self.n or self.s[self.i] != ":":
+                        raise ValueError("字典键后缺少冒号")
+                    self.i += 1
+                    result[self._hashable(key)] = self._value()
+                else:
+                    raise ValueError("字典项间缺少逗号")
+        # set
+        result = [self._hashable(first)]
+        while True:
+            self._skip_ws()
+            if self.i >= self.n:
+                raise ValueError("集合未闭合")
+            if self.s[self.i] == "}":
+                self.i += 1
+                return result
+            if self.s[self.i] == ",":
+                self.i += 1
+                self._skip_ws()
+                if self.i < self.n and self.s[self.i] == "}":
+                    self.i += 1
+                    return result
+                result.append(self._hashable(self._value()))
+            else:
+                raise ValueError("集合项间缺少逗号")
+
+    @staticmethod
+    def _hashable(key):
+        """dict 键需可哈希：list/set 键转为紧凑 JSON 字符串"""
+        if isinstance(key, (str, int, float, bool)) or key is None:
+            return key
+        return json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+
+    def _enum(self):
+        # <Enum.VALUE: 'value'> -> 取 'value'；无值形式 <Enum.VALUE> -> 'Enum.VALUE'
+        j = self.s.find(">", self.i)
+        if j < 0:
+            raise ValueError("枚举表示未闭合")
+        content = self.s[self.i + 1:j].strip()
+        self.i = j + 1
+        if ": " in content or content.endswith(":"):
+            _, _, val = content.rpartition(":")
+            val = val.strip()
+            if val:
+                import ast
+                try:
+                    return ast.literal_eval(val)
+                except (ValueError, SyntaxError):
+                    return val
+        return content
+
+    def _atom(self):
+        # 数字 / 标识符 / 构造器 ClassName(...)
+        j = self.i
+        if self.s[j] in "+-":
+            j += 1
+        num_start = j
+        while j < self.n and (self.s[j].isdigit() or self.s[j] in ".eE+-_"):
+            # eE 后允许符号；简化处理：交给 literal_eval 验证
+            if self.s[j] in "+-" and self.s[j - 1] not in "eE":
+                break
+            j += 1
+        if j > num_start and self.s[num_start:j].strip():
+            token = self.s[self.i:j]
+            self.i = j
+            import ast
+            try:
+                return ast.literal_eval(token)
+            except (ValueError, SyntaxError):
+                self.i = num_start  # 不是数字，回退按标识符处理
+        # 标识符（含点号）
+        j = self.i
+        if j < self.n and (self.s[j].isalpha() or self.s[j] == "_"):
+            while j < self.n and (self.s[j].isalnum() or self.s[j] in "._"):
+                j += 1
+            name = self.s[self.i:j]
+            self.i = j
+            self._skip_ws()
+            if self.i < self.n and self.s[self.i] == "(":
+                return self._constructor(name)
+            if name in ("True", "False", "None"):
+                return {"True": True, "False": False, "None": None}[name]
+            return name  # 裸标识符按字符串处理
+        raise ValueError(f"无法识别的字符：{self.s[self.i]!r}")
+
+    def _constructor(self, name):
+        # ClassName(k=v, k2=v) -> {"_type": name, ...}；位置参数按 _0/_1 编号
+        self.i += 1  # (
+        # set({...}) / frozenset({...}) / list([...])：直接返回参数的集合/数组表示
+        if name in ("set", "frozenset", "list", "tuple"):
+            self._skip_ws()
+            if self.i < self.n and self.s[self.i] in "[{(":
+                val = self._value()
+                self._skip_ws()
+                if self.i >= self.n or self.s[self.i] != ")":
+                    raise ValueError(f"{name}(...) 参数未闭合")
+                self.i += 1
+                return val
+            # 空集合 set() / list()：返回空数组
+            if self.i < self.n and self.s[self.i] == ")":
+                self.i += 1
+                return []
+            # 带关键字参数的其他形式（罕见）：按普通构造器处理
+        result = {"_type": name}
+        pos_index = 0
+        self._skip_ws()
+        if self.i < self.n and self.s[self.i] == ")":
+            self.i += 1
+            return result
+        while True:
+            # 尝试 k=v 形式
+            save = self.i
+            key = None
+            j = self.i
+            if j < self.n and (self.s[j].isalpha() or self.s[j] == "_"):
+                while j < self.n and (self.s[j].isalnum() or self.s[j] == "_"):
+                    j += 1
+                self._skip_ws_back(j)
+                if self.i < self.n and self.s[self.i] == "=" and \
+                        (self.i + 1 >= self.n or self.s[self.i + 1] != "="):
+                    key = self.s[save:j]
+                    self.i += 1
+            if key is None:
+                self.i = save
+                key = f"_{pos_index}"
+            result[key] = self._value()
+            pos_index += 1
+            self._skip_ws()
+            if self.i >= self.n:
+                raise ValueError("构造器参数未闭合")
+            if self.s[self.i] == ")":
+                self.i += 1
+                return result
+            if self.s[self.i] == ",":
+                self.i += 1
+                self._skip_ws()
+                if self.i < self.n and self.s[self.i] == ")":
+                    self.i += 1
+                    return result
+            else:
+                raise ValueError("构造器参数间缺少逗号")
+
+    def _skip_ws_back(self, j):
+        """从标识符结束位置 j 向后跳过空白，更新 self.i"""
+        while j < self.n and self.s[j] in self._WS:
+            j += 1
+        self.i = j
+
+
 def _py_literal(value, depth):
     """递归将 JSON 值转为 Python 字面量文本"""
     indent = "    " * depth
@@ -317,6 +610,10 @@ def _friendly_error(action_key, error):
         if action_key == "json_to_yaml":
             return "输入内容不是合法的 JSON（看起来更像 YAML）：" + msg
         return "YAML 解析失败，请检查缩进和冒号后空格：" + msg
+    if action_key == "python_to_json":
+        # literal_eval 抛出的异常均为解析失败（SyntaxError/ValueError）
+        return ("输入内容不是合法的 Python 字面量（需为字典/列表，True/False/None 大写开头、"
+                "字符串用单引号或双引号）：" + msg)
     return msg
 
 
@@ -338,6 +635,7 @@ _ACTIONS = {
     "format": json_format,
     "table": json_to_table,
     "python": json_to_python,
+    "python_to_json": python_to_json,
     "tree": json.loads,
     "xml_format": xml_format,
     "xml_compress": xml_compress,

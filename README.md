@@ -35,7 +35,7 @@ A local desktop toolbox built with Python + a Web UI (pywebview / WebView2) — 
 
 | 功能 | Feature |
 |---|---|
-| JSON 格式化 / 转表格 / 转字典 / 树形视图 | JSON format / to-table / to-Python-dict / tree view |
+| JSON 格式化 / 转表格 / 转字典 / 对象转JSON / 树形视图 | JSON format / to-table / to-Python-dict / to-JSON / tree view |
 | XML 格式化 / 压缩 | XML pretty-print / minify |
 | YAML 美化 / YAML ⇄ JSON | YAML format / YAML ⇄ JSON *(需 PyYAML / requires PyYAML)* |
 
@@ -45,6 +45,7 @@ A local desktop toolbox built with Python + a Web UI (pywebview / WebView2) — 
 - 🔀 侧边栏工具拖动排序，顺序自动保存（`%APPDATA%\ToolBox\config.json`）/ Drag-to-reorder sidebar, persisted
 - ✨ 全局 CSS 过渡动画，`prefers-reduced-motion` 自动降级 / Smooth CSS transitions throughout
 - 🌳 JSON 树形视图：同层元素括号包裹、可折叠计数徽标 / Tree view with bracket grouping & collapsible count badges
+- 🔄 JSON ⇄ Python 字典双向转换 / Two-way JSON ⇄ Python dict conversion
 - ⤵ 结果一键传回输入框，工具链式处理（YAML→JSON→转表格）无需复制粘贴 / One-click pass-back for chained workflows
 - 🧩 YAML 工具在输入为合法 JSON 时自动解锁 JSON 转表格/转字典/树形按钮 / YAML tab auto-unlocks JSON actions on JSON input
 - 🈶 解析错误中文友好提示（自动识别输入格式并指引正确按钮）/ Friendly Chinese error hints with format detection

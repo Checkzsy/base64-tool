@@ -29,10 +29,11 @@ const TOOLS = {
       { label: "解析", key: "jwt_decode", style: "green" } ] },
   ],
   formatters: [
-    { id: "JSON",  desc: "格式化 / 转表格 / 转字典 / 树形视图", actions: [
+    { id: "JSON",  desc: "格式化 / 转表格 / 转字典 / 转JSON / 树形视图", actions: [
       { label: "格式化", key: "format", style: "primary" },
       { label: "转表格", key: "table", style: "green" },
       { label: "转字典", key: "python", style: "purple" },
+      { label: "转JSON", key: "python_to_json", style: "green" },
       { label: "树形表格", key: "tree", style: "gray" } ] },
     { id: "XML",  desc: "XML 格式化 / 压缩", actions: [
       { label: "格式化", key: "xml_format", style: "primary" },
@@ -53,7 +54,8 @@ for (const g of Object.keys(TOOLS))
 // YAML 动态解锁：输入为合法 JSON 时复用 JSON 工具的动作（引用同一份定义，不重复维护）。
 // 用函数声明（提升）以便 TOOLS 注册表可直接引用；函数体内的 ALL_IDS 为惰性求值。
 function jsonExtraActions() {
-  return ALL_IDS["JSON"].actions.filter(a => a.key !== "format")
+  // 排除 format（与 YAML 美化重复）与 python_to_json（输入已是 JSON，无需再转）
+  return ALL_IDS["JSON"].actions.filter(a => a.key !== "format" && a.key !== "python_to_json")
     .map(a => ({ ...a, label: `JSON ${a.label}` }));
 }
 

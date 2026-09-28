@@ -201,6 +201,7 @@ class EncodeApp:
             ("格式化", "format", "Accent.TButton"),
             ("转表格", "table", "Success.TButton"),
             ("转字典", "python", "Info.TButton"),
+            ("转JSON", "python_to_json", "Success.TButton"),
             ("树形表格", "tree", "Muted.TButton"),
         ])
         self._create_tool_tab(self.fmt_notebook, "XML", [
